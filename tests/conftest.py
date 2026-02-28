@@ -1,13 +1,14 @@
 """
 tests/conftest.py
 ─────────────────
-Shared pytest fixtures for the entire test suite.
+Shared pytest fixtures.
 
-Strategy:
-  - Use an in-memory SQLite database (via aiosqlite) so tests need no
-    external PostgreSQL instance.
-  - Override the `get_db` dependency to inject a test session.
-  - Provide a pre-authenticated `auth_headers` fixture for protected routes.
+All fixtures are function-scoped: each test gets a fresh in-memory
+SQLite database.  This gives perfect isolation at the cost of slightly
+more setup per test — entirely acceptable for an in-memory backend.
+
+The `engine` and `db_session` share the same asyncio event loop
+(function scope) so there is no cross-loop confusion with pytest-asyncio.
 """
 
 from __future__ import annotations
@@ -24,40 +25,42 @@ from sqlalchemy.ext.asyncio import (
 from app.database import Base, get_db
 from app.main import create_app
 
-# ── Test database (SQLite in-memory) ─────────────────────────────────────────
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
 
-@pytest_asyncio.fixture(scope="session")
-async def engine():
-    """Create a single async engine for the whole test session."""
-    _engine = create_async_engine(
+@pytest_asyncio.fixture
+async def db_session():
+    """
+    Yield a fresh async session backed by an in-memory SQLite DB.
+    The DB is created and torn down per test — no state leaks between tests.
+    """
+    engine = create_async_engine(
         TEST_DATABASE_URL,
         connect_args={"check_same_thread": False},
         echo=False,
     )
-    async with _engine.begin() as conn:
-        # Import models to register metadata
-        from app.models import User, Project  # noqa: F401
+
+    # Register models with Base.metadata before creating tables
+    from app.models import User, Project  # noqa: F401
+
+    async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    yield _engine
-    await _engine.dispose()
 
-
-@pytest_asyncio.fixture
-async def db_session(engine):
-    """Yield a fresh session for each test, rolling back after."""
-    factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    factory = async_sessionmaker(
+        bind=engine, class_=AsyncSession, expire_on_commit=False
+    )
     async with factory() as session:
         yield session
         await session.rollback()
+
+    await engine.dispose()
 
 
 @pytest_asyncio.fixture
 async def client(db_session: AsyncSession):
     """
-    Async HTTP client with the `get_db` dependency overridden to use the
-    test session so no real database connection is required.
+    Async test client with the `get_db` dependency overridden to use
+    the per-test SQLite session — no real PostgreSQL required.
     """
     app = create_app()
 

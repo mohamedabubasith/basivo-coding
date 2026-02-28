@@ -26,10 +26,8 @@ from app.core.exceptions import register_exception_handlers
 from app.database import create_tables, init_db
 from app.routers import auth, projects, workspace
 
-logging.basicConfig(
-    level=logging.DEBUG if get_settings().debug else logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s: %(message)s",
-)
+# Basic config at import time; level is updated inside create_app() once settings load.
+logging.basicConfig(format="%(asctime)s  %(levelname)-8s  %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -68,6 +66,7 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     """Application factory — creates and configures the FastAPI app."""
     settings = get_settings()
+    logging.getLogger().setLevel(logging.DEBUG if settings.debug else logging.INFO)
 
     app = FastAPI(
         title=settings.app_name,

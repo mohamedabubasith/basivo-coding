@@ -75,11 +75,14 @@ async def login_user(payload: LoginRequest, db: AsyncSession) -> TokenResponse:
     result = await db.execute(select(User).where(User.email == payload.email))
     user = result.scalar_one_or_none()
 
-    # Always run verify_password even on missing user to avoid timing attacks
-    dummy_hash = "$2b$12$dummyhashfortimingnopurposeatall"
-    candidate_hash = user.hashed_password if user else dummy_hash
+    # Always run verify_password even when the user doesn't exist to prevent
+    # timing-based user enumeration. The dummy hash is a pre-computed valid
+    # bcrypt hash that will never match any real user's password.
+    _DUMMY_HASH = "$2b$12$aj9NwSPAjHetYjyhfASXZeckJKOBSlIjpi0pK4c00teqCpdmUCAc."
+    candidate_hash = user.hashed_password if user else _DUMMY_HASH
 
-    if not verify_password(payload.password, candidate_hash) or user is None:
+    password_ok = verify_password(payload.password, candidate_hash)
+    if not password_ok or user is None:
         raise InvalidCredentialsError()
 
     if not user.is_active:

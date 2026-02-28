@@ -52,6 +52,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",   # silently ignore env vars not declared as fields (e.g. CREATE_TABLES)
     )
 
 
