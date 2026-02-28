@@ -301,7 +301,7 @@ def start_dev(host: str, port: int) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Basivo launcher")
     parser.add_argument("--dev",  action="store_true", help="Run in development mode (hot-reload)")
-    parser.add_argument("--host", default="0.0.0.0",  help="Bind host (default: 0.0.0.0)")
+    parser.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1 — expose via nginx)")
     parser.add_argument("--port", type=int, default=8000, help="Bind port (default: 8000)")
     args = parser.parse_args()
 
