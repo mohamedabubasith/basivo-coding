@@ -88,6 +88,9 @@ if [[ "$LOGS_MODE" == "true" ]]; then
 fi
 
 # ── Start ─────────────────────────────────────────────────────────────────────
+log "Stopping any existing containers…"
+$COMPOSE_CMD down 2>/dev/null || true
+
 log "Building and starting containers…"
 $COMPOSE_CMD up --build -d
 
