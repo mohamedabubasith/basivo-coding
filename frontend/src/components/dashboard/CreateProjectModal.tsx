@@ -160,7 +160,7 @@ export function CreateProjectModal({ open, onClose, onCreated }: Props) {
           </h3>
 
           {/* Provider quick-select */}
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
             {LLM_PROVIDERS.map((p, i) => (
               <button
                 key={p.label}

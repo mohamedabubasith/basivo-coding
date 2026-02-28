@@ -1,19 +1,13 @@
 ###############################################################################
 #  Basivo — Production docker-compose
 #
-#  All config is mapped INTERNALLY via the environment: section.
-#  No .env file is mounted into or needed inside any container.
-#
-#  The only thing you need on the HOST before running:
-#    export JWT_SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-#    export ENCRYPTION_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
-#    export POSTGRES_PASSWORD=<a strong password>
+#  Just run:
 #    docker compose up -d --build
 #
-#  Or put those three vars in a host-side .env.production file and run:
-#    docker compose --env-file .env.production up -d --build
-#  (docker-compose reads the host file for variable substitution only;
-#   it is NOT mounted into containers)
+#  Secrets are pre-generated and embedded below.
+#  To override any value, create a .env file next to this file — Docker
+#  Compose reads it automatically (host-side only, never mounted inside
+#  containers).
 ###############################################################################
 
 services:
@@ -24,12 +18,10 @@ services:
     restart: unless-stopped
     volumes:
       - pg_data:/var/lib/postgresql/data
-    # All DB credentials are hardcoded here — only accessible inside
-    # the 'internal' network, never exposed externally.
     environment:
       POSTGRES_DB:       basivo
       POSTGRES_USER:     basivo
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD env var}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-c-tIdn0mVQ_OgqelmOVwUVS6XzLnlt7F}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U basivo -d basivo"]
       interval: 10s
@@ -51,30 +43,27 @@ services:
         condition: service_healthy
     volumes:
       - projects_data:/app/projects   # persist AI-generated workspace files
-    # ── Internal environment mapping ─────────────────────────────────────────
-    # Every value the app needs is explicitly declared here.
-    # Nothing leaks in from the host filesystem.
     environment:
-      # Database (points to the internal 'db' service — not exposed externally)
-      DATABASE_URL: "postgresql+asyncpg://basivo:${POSTGRES_PASSWORD}@db:5432/basivo"
+      # Database (internal network only — never exposed externally)
+      DATABASE_URL: "postgresql+asyncpg://basivo:${POSTGRES_PASSWORD:-c-tIdn0mVQ_OgqelmOVwUVS6XzLnlt7F}@db:5432/basivo"
 
-      # Secrets — injected from host env vars or --env-file (NEVER from a file inside the container)
-      JWT_SECRET_KEY:  ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY env var}
-      ENCRYPTION_KEY:  ${ENCRYPTION_KEY:?Set ENCRYPTION_KEY env var}
+      # Pre-generated secrets — override via .env file on the host if needed
+      JWT_SECRET_KEY:  ${JWT_SECRET_KEY:-a192db58bd0180f90f411fea0637c49170e5b331945d33ee6ee54222ede8e3d4}
+      ENCRYPTION_KEY:  ${ENCRYPTION_KEY:-Ldl0Ht0RHrTOxP2_K9PSgWlJxu1tvXt3Rb4pq8kQxpY=}
 
       # JWT settings
       JWT_ALGORITHM:                   HS256
       JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-1440}
 
-      # CORS — restrict to your domain in production
-      CORS_ORIGINS: '["${PUBLIC_URL:-http://localhost:8000}"]'
+      # CORS — set PUBLIC_URL to your domain in production (e.g. https://app.example.com)
+      CORS_ORIGINS: '["${PUBLIC_URL:-http://localhost:8000}","http://localhost:3000"]'
 
       # App behaviour
-      DEBUG:                    "false"
-      PROJECTS_ROOT:            /app/projects
+      DEBUG:                      "false"
+      PROJECTS_ROOT:              /app/projects
       RESET_TOKEN_EXPIRE_MINUTES: 30
 
-      # OpenCode binary — mount it from host if you have it installed:
+      # OpenCode binary — mount from host if installed:
       #   volumes:
       #     - /usr/local/bin/opencode:/usr/local/bin/opencode:ro
       OPENCODE_BINARY:          ${OPENCODE_BINARY:-opencode}
@@ -91,4 +80,4 @@ volumes:
 
 networks:
   internal: { internal: true }   # DB is unreachable from outside Docker
-  external: {}                   # App is reachable via ports:
+  external: {}                   # App is reachable via the exposed port

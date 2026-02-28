@@ -249,7 +249,7 @@ function PanelTab({
 
 function PreviewPanel({ projectId }: { projectId: string }) {
   const { previewUrl, setPreviewUrl } = useWorkspaceStore();
-  const [customUrl, setCustomUrl] = useState("http://localhost:5173");
+  const [customUrl, setCustomUrl] = useState("");
 
   const load = () => setPreviewUrl(customUrl.trim());
 

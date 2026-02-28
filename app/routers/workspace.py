@@ -40,7 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppError, ProcessAlreadyRunningError
 from app.database import get_db
-from app.dependencies import get_ws_current_user
+from app.dependencies import get_current_active_user, get_ws_current_user
 from app.models.user import User
 from app.schemas.project import WsIncomingMessage, WsOutgoingMessage
 from app.services.opencode_service import manager, opencode_service
@@ -192,7 +192,7 @@ async def workspace_ws(
 )
 async def workspace_status(
     project_id: uuid.UUID,
-    current_user: User = Depends(get_ws_current_user),
+    current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """
