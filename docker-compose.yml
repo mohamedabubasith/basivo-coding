@@ -1,85 +1,94 @@
-# docker-compose.yml
-# Full local development stack: FastAPI backend + PostgreSQL
+###############################################################################
+#  Basivo — Production docker-compose
 #
-# Usage:
-#   docker compose up --build          # start everything
-#   docker compose exec backend bash   # shell into the backend
-#   docker compose down -v             # stop and remove volumes
+#  All config is mapped INTERNALLY via the environment: section.
+#  No .env file is mounted into or needed inside any container.
 #
-# ─────────────────────────────────────────────────────────────────────────────
-
-version: "3.9"
+#  The only thing you need on the HOST before running:
+#    export JWT_SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+#    export ENCRYPTION_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+#    export POSTGRES_PASSWORD=<a strong password>
+#    docker compose up -d --build
+#
+#  Or put those three vars in a host-side .env.production file and run:
+#    docker compose --env-file .env.production up -d --build
+#  (docker-compose reads the host file for variable substitution only;
+#   it is NOT mounted into containers)
+###############################################################################
 
 services:
 
-  # ── PostgreSQL ─────────────────────────────────────────────────────────────
-  postgres:
+  # ── PostgreSQL ───────────────────────────────────────────────────────────────
+  db:
     image: postgres:16-alpine
     restart: unless-stopped
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: basivo
-    ports:
-      - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - pg_data:/var/lib/postgresql/data
+    # All DB credentials are hardcoded here — only accessible inside
+    # the 'internal' network, never exposed externally.
+    environment:
+      POSTGRES_DB:       basivo
+      POSTGRES_USER:     basivo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD env var}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U basivo -d basivo"]
+      interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 5
+      start_period: 10s
+    networks: [internal]
 
-  # ── FastAPI Backend ────────────────────────────────────────────────────────
-  backend:
+  # ── App (FastAPI + built React frontend) ─────────────────────────────────────
+  app:
     build:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      # Override DATABASE_URL to use the Docker service name
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/basivo
-      PROJECTS_ROOT: /app/projects
     ports:
-      - "8000:8000"
-    volumes:
-      # ── CRITICAL DOCKER MOUNT POINT ─────────────────────────────────────────
-      # Bind-mount the host projects directory into the container so that:
-      #   1. OpenCode subprocesses can read/write user project files.
-      #   2. Files persist even when the container is rebuilt/replaced.
-      #   3. A future "OpenCode container" can mount the same volume.
-      #
-      # Production: use a named volume or NFS mount instead of a bind mount.
-      - projects_data:/app/projects
-      # ── Hot-reload in development ──────────────────────────────────────────
-      # Uncomment the line below to mount source code for live reloading
-      # (also change the CMD to add --reload):
-      # - ./app:/app/app
+      - "${APP_PORT:-8000}:8000"
     depends_on:
-      postgres:
+      db:
         condition: service_healthy
-    command: >
-      sh -c "alembic upgrade head &&
-             uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1"
+    volumes:
+      - projects_data:/app/projects   # persist AI-generated workspace files
+    # ── Internal environment mapping ─────────────────────────────────────────
+    # Every value the app needs is explicitly declared here.
+    # Nothing leaks in from the host filesystem.
+    environment:
+      # Database (points to the internal 'db' service — not exposed externally)
+      DATABASE_URL: "postgresql+asyncpg://basivo:${POSTGRES_PASSWORD}@db:5432/basivo"
 
-  # ── OpenCode Runner (future) ───────────────────────────────────────────────
-  # Uncomment this service once you containerise the OpenCode CLI.
-  # The backend will call `docker run` (or a sidecar API) instead of spawning
-  # a subprocess directly.
-  #
-  # opencode-runner:
-  #   image: opencode:latest
-  #   volumes:
-  #     - projects_data:/app/projects   # shared volume with backend
-  #   environment:
-  #     OPENAI_API_KEY: ""  # injected per-request by the backend
-  #     OPENAI_BASE_URL: "" # injected per-request by the backend
+      # Secrets — injected from host env vars or --env-file (NEVER from a file inside the container)
+      JWT_SECRET_KEY:  ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY env var}
+      ENCRYPTION_KEY:  ${ENCRYPTION_KEY:?Set ENCRYPTION_KEY env var}
 
+      # JWT settings
+      JWT_ALGORITHM:                   HS256
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-1440}
+
+      # CORS — restrict to your domain in production
+      CORS_ORIGINS: '["${PUBLIC_URL:-http://localhost:8000}"]'
+
+      # App behaviour
+      DEBUG:                    "false"
+      PROJECTS_ROOT:            /app/projects
+      RESET_TOKEN_EXPIRE_MINUTES: 30
+
+      # OpenCode binary — mount it from host if you have it installed:
+      #   volumes:
+      #     - /usr/local/bin/opencode:/usr/local/bin/opencode:ro
+      OPENCODE_BINARY:          ${OPENCODE_BINARY:-opencode}
+      OPENCODE_TIMEOUT_SECONDS: ${OPENCODE_TIMEOUT:-300}
+
+      # Server tuning
+      WORKERS: ${WORKERS:-1}
+      PORT:    8000
+    networks: [internal, external]
 
 volumes:
-  postgres_data:
-  projects_data:
-    # PRODUCTION: replace with an NFS or cloud-provider managed volume
-    # for shared access across multiple backend replicas.
+  pg_data:       { driver: local }
+  projects_data: { driver: local }
+
+networks:
+  internal: { internal: true }   # DB is unreachable from outside Docker
+  external: {}                   # App is reachable via ports:
