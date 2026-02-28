@@ -116,6 +116,11 @@ def check_prerequisites() -> None:
     npm_ver = subprocess.check_output(["npm", "--version"], text=True).strip()
     log(f"npm {npm_ver} ✓")
 
+    # opencode (warn only — app starts without it but AI features won't work)
+    if not shutil.which("opencode"):
+        warn("opencode binary not found in PATH — AI workspace features will not work.")
+        warn("Install it: https://opencode.ai/docs/installation")
+
 # ── Step 2 — Generate .env ────────────────────────────────────────────────────
 
 def ensure_env() -> None:
