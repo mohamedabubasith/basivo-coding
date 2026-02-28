@@ -20,11 +20,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
 from app.core.exceptions import register_exception_handlers
 from app.database import create_tables, init_db
-from app.routers import auth, projects, workspace
+from app.routers import auth, files, projects, providers, terminal, workspace
 
 # Basic config at import time; level is updated inside create_app() once settings load.
 logging.basicConfig(format="%(asctime)s  %(levelname)-8s  %(name)s: %(message)s")
@@ -98,6 +100,9 @@ def create_app() -> FastAPI:
 
     app.include_router(auth.router, prefix=API_PREFIX)
     app.include_router(projects.router, prefix=API_PREFIX)
+    app.include_router(files.router, prefix=API_PREFIX)
+    app.include_router(terminal.router, prefix=API_PREFIX)
+    app.include_router(providers.router, prefix=API_PREFIX)
     # Workspace router mounts both the WS endpoint AND the REST status endpoint
     app.include_router(workspace.router, prefix=API_PREFIX)
 
@@ -105,6 +110,20 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["Health"], summary="Liveness probe")
     async def health() -> dict:
         return {"status": "ok", "version": settings.app_version}
+
+    # ── Serve compiled React frontend (production) ────────────────────────────
+    # In development the Vite dev server runs separately on port 5173.
+    # In production `npm run build` outputs to frontend/dist/ which FastAPI
+    # serves directly so a single process handles both API and UI.
+    import pathlib
+    _frontend_dist = pathlib.Path(__file__).parent.parent / "frontend" / "dist"
+    if _frontend_dist.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_frontend_dist / "assets")), name="assets")
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        async def spa_fallback(full_path: str) -> FileResponse:
+            """Serve index.html for all non-API routes (SPA client-side routing)."""
+            return FileResponse(str(_frontend_dist / "index.html"))
 
     return app
 

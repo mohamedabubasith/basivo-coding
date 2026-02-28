@@ -1,75 +1,57 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# Dockerfile — FastAPI BYOK backend
-#
-# Multi-stage build:
-#   Stage 1 (builder): install Python deps into a venv
-#   Stage 2 (runtime): copy venv + source, run as non-root
-#
-# Usage:
-#   docker build -t basivo-backend .
-#   docker run -p 8000:8000 --env-file .env basivo-backend
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ── Stage 1: dependency builder ───────────────────────────────────────────────
-FROM python:3.11-slim AS builder
-
+# ── Stage 1: Build React frontend ────────────────────────────────────────────
+FROM node:22-alpine AS frontend-builder
 WORKDIR /build
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm ci --prefer-offline
+COPY frontend/ ./
+RUN npm run build          # → /build/dist
 
-# Install build tools needed by some packages (e.g. psycopg2, cryptography)
+
+# ── Stage 2: Production image ─────────────────────────────────────────────────
+FROM python:3.12-slim
+
+# Runtime system deps: git (workspace ops), libpq (asyncpg), curl (healthcheck)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        gcc libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy only the requirements file first to leverage layer caching
-COPY requirements.txt .
-
-RUN python -m venv /opt/venv && \
-    /opt/venv/bin/pip install --upgrade pip && \
-    /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
-
-
-# ── Stage 2: runtime image ────────────────────────────────────────────────────
-FROM python:3.11-slim AS runtime
-
-# Install runtime-only native libs
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        libpq5 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create a non-root user for security
-RUN useradd --create-home --shell /bin/bash appuser
+        git curl libpq5 \
+    && rm -rf /var/lib/apt/lists/* \
+    && git config --global user.email "ai@basivo.dev" \
+    && git config --global user.name  "Basivo AI"
 
 WORKDIR /app
 
-# Copy the virtual environment from builder
-COPY --from=builder /opt/venv /opt/venv
+# Python deps (cached layer — only rebuilds when requirements.txt changes)
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application source
-COPY app/ ./app/
+# Application code
+COPY app/     ./app/
 COPY alembic/ ./alembic/
-COPY alembic.ini .
+COPY alembic.ini ./
 
-# Create the projects root directory.
-# DOCKER MOUNT POINT: bind-mount a host directory here so OpenCode can
-# read/write project files that persist beyond the container lifecycle.
-#
-#   docker run -v /host/path/to/projects:/app/projects basivo-backend
-#
-# In docker-compose.yml (see docker-compose.yml):
-#   volumes:
-#     - projects_data:/app/projects
-RUN mkdir -p /app/projects && chown appuser:appuser /app/projects
+# Built frontend (served by FastAPI via StaticFiles)
+COPY --from=frontend-builder /build/dist ./frontend/dist
 
-USER appuser
-
-ENV PATH="/opt/venv/bin:$PATH" \
-    PYTHONUNBUFFERED=1 \
+# All config comes from the environment — no .env file mounted or needed.
+# Required env vars (set in docker-compose / k8s / cloud run):
+#   DATABASE_URL, JWT_SECRET_KEY, ENCRYPTION_KEY
+ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PROJECTS_ROOT=/app/projects
+    PROJECTS_ROOT=/app/projects \
+    PORT=8000 \
+    WORKERS=1
+
+RUN mkdir -p /app/projects
 
 EXPOSE 8000
 
-# Run database migrations then start the server.
-# In production you may want to run `alembic upgrade head` as a separate
-# init container rather than as part of the CMD.
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:${PORT}/health || exit 1
+
+# Migrate → serve
+CMD ["sh", "-c", "\
+    echo '[basivo] Running Alembic migrations…' && \
+    PYTHONPATH=/app alembic upgrade head && \
+    echo '[basivo] Starting server on 0.0.0.0:'${PORT} && \
+    exec uvicorn app.main:app \
+        --host 0.0.0.0 --port ${PORT} --workers ${WORKERS} --log-level info \
+"]
