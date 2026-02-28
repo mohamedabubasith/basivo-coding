@@ -26,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import get_settings
 from app.core.exceptions import register_exception_handlers
 from app.database import create_tables, init_db
-from app.routers import auth, files, projects, providers, terminal, workspace
+from app.routers import auth, files, git, projects, providers, terminal, workspace
 
 # Basic config at import time; level is updated inside create_app() once settings load.
 logging.basicConfig(format="%(asctime)s  %(levelname)-8s  %(name)s: %(message)s")
@@ -105,6 +105,7 @@ def create_app() -> FastAPI:
     app.include_router(providers.router, prefix=API_PREFIX)
     # Workspace router mounts both the WS endpoint AND the REST status endpoint
     app.include_router(workspace.router, prefix=API_PREFIX)
+    app.include_router(git.router, prefix=API_PREFIX)
 
     # ── Health check ──────────────────────────────────────────────────────────
     @app.get("/health", tags=["Health"], summary="Liveness probe")
