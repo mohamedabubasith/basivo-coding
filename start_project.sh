@@ -95,8 +95,8 @@ log "Building and starting containers…"
 $COMPOSE_CMD up --build -d
 
 echo -e "\n${BOLD}${GREEN}  ✓ Basivo is running${RESET}"
-echo -e "  App:    ${CYAN}http://localhost:8000${RESET}"
-echo -e "  API:    ${CYAN}http://localhost:8000/api/docs${RESET}"
-echo -e "  Health: ${CYAN}http://localhost:8000/health${RESET}"
+echo -e "  App:    ${CYAN}http://localhost:8080${RESET}"
+echo -e "  API:    ${CYAN}http://localhost:8080/api/docs${RESET}"
+echo -e "  Health: ${CYAN}http://localhost:8080/health${RESET}"
 echo -e "\n  Logs:   ${BOLD}./start_project.sh --logs${RESET}"
 echo -e "  Stop:   ${BOLD}./start_project.sh --down${RESET}\n"
