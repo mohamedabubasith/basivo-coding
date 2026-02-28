@@ -1,85 +1,83 @@
-# docker-compose.yml
-# Full local development stack: FastAPI backend + PostgreSQL
+###############################################################################
+#  Basivo — Production docker-compose
 #
-# Usage:
-#   docker compose up --build          # start everything
-#   docker compose exec backend bash   # shell into the backend
-#   docker compose down -v             # stop and remove volumes
+#  Just run:
+#    docker compose up -d --build
 #
-# ─────────────────────────────────────────────────────────────────────────────
-
-version: "3.9"
+#  Secrets are pre-generated and embedded below.
+#  To override any value, create a .env file next to this file — Docker
+#  Compose reads it automatically (host-side only, never mounted inside
+#  containers).
+###############################################################################
 
 services:
 
-  # ── PostgreSQL ─────────────────────────────────────────────────────────────
-  postgres:
+  # ── PostgreSQL ───────────────────────────────────────────────────────────────
+  db:
     image: postgres:16-alpine
     restart: unless-stopped
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: basivo
-    ports:
-      - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - pg_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB:       basivo
+      POSTGRES_USER:     basivo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-c-tIdn0mVQ_OgqelmOVwUVS6XzLnlt7F}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U basivo -d basivo"]
+      interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 5
+      start_period: 10s
+    networks: [internal]
 
-  # ── FastAPI Backend ────────────────────────────────────────────────────────
-  backend:
+  # ── App (FastAPI + built React frontend) ─────────────────────────────────────
+  app:
     build:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      # Override DATABASE_URL to use the Docker service name
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/basivo
-      PROJECTS_ROOT: /app/projects
     ports:
-      - "8000:8000"
-    volumes:
-      # ── CRITICAL DOCKER MOUNT POINT ─────────────────────────────────────────
-      # Bind-mount the host projects directory into the container so that:
-      #   1. OpenCode subprocesses can read/write user project files.
-      #   2. Files persist even when the container is rebuilt/replaced.
-      #   3. A future "OpenCode container" can mount the same volume.
-      #
-      # Production: use a named volume or NFS mount instead of a bind mount.
-      - projects_data:/app/projects
-      # ── Hot-reload in development ──────────────────────────────────────────
-      # Uncomment the line below to mount source code for live reloading
-      # (also change the CMD to add --reload):
-      # - ./app:/app/app
+      - "${APP_PORT:-8000}:8000"
     depends_on:
-      postgres:
+      db:
         condition: service_healthy
-    command: >
-      sh -c "alembic upgrade head &&
-             uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1"
+    volumes:
+      - projects_data:/app/projects   # persist AI-generated workspace files
+    environment:
+      # Database (internal network only — never exposed externally)
+      DATABASE_URL: "postgresql+asyncpg://basivo:${POSTGRES_PASSWORD:-c-tIdn0mVQ_OgqelmOVwUVS6XzLnlt7F}@db:5432/basivo"
 
-  # ── OpenCode Runner (future) ───────────────────────────────────────────────
-  # Uncomment this service once you containerise the OpenCode CLI.
-  # The backend will call `docker run` (or a sidecar API) instead of spawning
-  # a subprocess directly.
-  #
-  # opencode-runner:
-  #   image: opencode:latest
-  #   volumes:
-  #     - projects_data:/app/projects   # shared volume with backend
-  #   environment:
-  #     OPENAI_API_KEY: ""  # injected per-request by the backend
-  #     OPENAI_BASE_URL: "" # injected per-request by the backend
+      # Pre-generated secrets — override via .env file on the host if needed
+      JWT_SECRET_KEY:  ${JWT_SECRET_KEY:-a192db58bd0180f90f411fea0637c49170e5b331945d33ee6ee54222ede8e3d4}
+      ENCRYPTION_KEY:  ${ENCRYPTION_KEY:-Ldl0Ht0RHrTOxP2_K9PSgWlJxu1tvXt3Rb4pq8kQxpY=}
 
+      # JWT settings
+      JWT_ALGORITHM:                   HS256
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-1440}
+
+      # CORS — set PUBLIC_URL to your domain in production (e.g. https://app.example.com)
+      CORS_ORIGINS: '["${PUBLIC_URL:-http://localhost:8000}","http://localhost:3000"]'
+
+      # App behaviour
+      DEBUG:                      "false"
+      PROJECTS_ROOT:              /app/projects
+      RESET_TOKEN_EXPIRE_MINUTES: 30
+
+      # OpenCode binary — mount from host if installed:
+      #   volumes:
+      #     - /usr/local/bin/opencode:/usr/local/bin/opencode:ro
+      OPENCODE_BINARY:          ${OPENCODE_BINARY:-opencode}
+      OPENCODE_TIMEOUT_SECONDS: ${OPENCODE_TIMEOUT:-300}
+
+      # Server tuning
+      WORKERS: ${WORKERS:-1}
+      PORT:    8000
+    networks: [internal, external]
 
 volumes:
-  postgres_data:
-  projects_data:
-    # PRODUCTION: replace with an NFS or cloud-provider managed volume
-    # for shared access across multiple backend replicas.
+  pg_data:       { driver: local }
+  projects_data: { driver: local }
+
+networks:
+  internal: { internal: true }   # DB is unreachable from outside Docker
+  external: {}                   # App is reachable via the exposed port

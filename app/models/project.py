@@ -64,6 +64,12 @@ class Project(Base):
     # Optional: the model identifier to pass to OpenCode, e.g. "gpt-4o"
     llm_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
+    # ── GitHub integration (optional) ─────────────────────────────────────────
+    # Full repo URL, e.g. "https://github.com/user/repo.git"
+    github_repo_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    # GitHub Personal Access Token encrypted with Fernet — never returned in API responses
+    github_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # ── Timestamps ────────────────────────────────────────────────────────────
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
