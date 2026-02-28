@@ -3,19 +3,19 @@
 start_app.py — Basivo one-file launcher for cloud servers
 ----------------------------------------------------------
 Usage:
-    python3 start_app.py              # production (builds frontend, serves via uvicorn)
-    python3 start_app.py --dev        # dev mode   (uvicorn --reload + vite dev server)
-    python3 start_app.py --port 9000  # custom port
-    python3 start_app.py --host 127.0.0.1
+    python3 start_app.py                        # production, all automatic
+    python3 start_app.py --domain example.com   # set CORS + display URL
+    python3 start_app.py --port 9000            # custom port
+    python3 start_app.py --dev                  # dev mode (hot-reload + vite)
 
-What this script does automatically:
-    1. Checks Python / Node / npm versions
-    2. Creates .env with secure random secrets if one does not exist
-    3. Creates a Python venv (.venv/) and installs requirements.txt
-    4. Ensures the PostgreSQL DB + user exist
+Everything is handled automatically — no .env editing required:
+    1. Checks Python / Node / npm / opencode
+    2. Generates .env with secure random secrets (skips if already present)
+    3. Creates .venv and installs requirements.txt
+    4. Ensures PostgreSQL DB + user exist
     5. Runs Alembic migrations (alembic upgrade head)
-    6. Installs npm dependencies and builds the React frontend
-    7. Starts uvicorn (production) or uvicorn + vite (dev)
+    6. npm install + npm run build (production frontend)
+    7. Starts uvicorn on 127.0.0.1 (expose via nginx)
 """
 
 from __future__ import annotations
@@ -31,12 +31,12 @@ from pathlib import Path
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
-ROOT = Path(__file__).parent.resolve()
-VENV = ROOT / ".venv"
-FRONTEND = ROOT / "frontend"
-DIST = FRONTEND / "dist"
-ENV_FILE = ROOT / ".env"
-PROJECTS_DIR = ROOT / "projects"
+ROOT        = Path(__file__).parent.resolve()
+VENV        = ROOT / ".venv"
+FRONTEND    = ROOT / "frontend"
+DIST        = FRONTEND / "dist"
+ENV_FILE    = ROOT / ".env"
+PROJECTS_DIR= ROOT / "projects"
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 
@@ -56,7 +56,6 @@ def die(msg: str)  -> None: print(f"{RED}[basivo] ERROR:{RESET} {msg}", file=sys
 
 def run(cmd: list[str], *, cwd: Path = ROOT, env: dict | None = None,
         capture: bool = False) -> subprocess.CompletedProcess:
-    """Run a command, raising SystemExit on failure."""
     merged_env = {**os.environ, **(env or {})}
     result = subprocess.run(
         cmd, cwd=str(cwd), env=merged_env,
@@ -70,7 +69,6 @@ def run(cmd: list[str], *, cwd: Path = ROOT, env: dict | None = None,
 
 
 def python_in_venv() -> str:
-    """Return the path to the Python interpreter inside the venv."""
     if platform.system() == "Windows":
         return str(VENV / "Scripts" / "python.exe")
     return str(VENV / "bin" / "python")
@@ -98,42 +96,36 @@ def uvicorn_in_venv() -> str:
 def check_prerequisites() -> None:
     log("Checking prerequisites…")
 
-    # Python version
     major, minor = sys.version_info.major, sys.version_info.minor
     if (major, minor) < (3, 11):
         die(f"Python 3.11+ required, found {major}.{minor}")
     log(f"Python {major}.{minor} ✓")
 
-    # Node
     if not shutil.which("node"):
-        die("Node.js not found. Install it: https://nodejs.org")
+        die("Node.js not found — install: https://nodejs.org")
     node_ver = subprocess.check_output(["node", "--version"], text=True).strip()
     log(f"Node {node_ver} ✓")
 
-    # npm
     if not shutil.which("npm"):
-        die("npm not found. Install Node.js: https://nodejs.org")
+        die("npm not found — install Node.js: https://nodejs.org")
     npm_ver = subprocess.check_output(["npm", "--version"], text=True).strip()
     log(f"npm {npm_ver} ✓")
 
-    # opencode (warn only — app starts without it but AI features won't work)
     if not shutil.which("opencode"):
-        warn("opencode binary not found in PATH — AI workspace features will not work.")
-        warn("Install it: https://opencode.ai/docs/installation")
+        warn("opencode not found — AI workspace features will be unavailable")
+    else:
+        log("opencode ✓")
 
-# ── Step 2 — Generate .env ────────────────────────────────────────────────────
+# ── Step 2 — Auto-generate .env (zero touch) ──────────────────────────────────
 
-def ensure_env() -> None:
+def ensure_env(domain: str | None) -> None:
     if ENV_FILE.exists():
-        log(f"Using existing {ENV_FILE.name}")
+        log(".env already present — skipping generation")
         return
 
-    warn(".env not found — generating one with secure random secrets…")
+    import secrets as _s
+    jwt_key = _s.token_hex(32)
 
-    import secrets as _secrets
-    jwt_key = _secrets.token_hex(32)
-
-    # Fernet key — requires cryptography; fall back to a raw urlsafe-b64 key
     try:
         from cryptography.fernet import Fernet
         fernet_key = Fernet.generate_key().decode()
@@ -141,14 +133,18 @@ def ensure_env() -> None:
         import base64
         fernet_key = base64.urlsafe_b64encode(os.urandom(32)).decode()
 
-    db_url = "postgresql+asyncpg://basivo:basivo@localhost:5432/basivo"
+    if domain:
+        scheme = "https" if not domain.startswith("http") else ""
+        origin = f"{scheme}://{domain}" if scheme else domain
+        cors = f'["{origin}"]'
+    else:
+        cors = '["*"]'
 
     ENV_FILE.write_text(f"""\
-# Auto-generated by start_app.py — review before sharing this file!
 DEBUG=false
-CORS_ORIGINS=["http://localhost:8000","http://localhost:3000"]
+CORS_ORIGINS={cors}
 
-DATABASE_URL={db_url}
+DATABASE_URL=postgresql+asyncpg://basivo:basivo@localhost:5432/basivo
 
 JWT_SECRET_KEY={jwt_key}
 JWT_ALGORITHM=HS256
@@ -162,21 +158,19 @@ OPENCODE_BINARY=opencode
 PROJECTS_ROOT={PROJECTS_DIR}
 OPENCODE_TIMEOUT_SECONDS=300
 """)
-    ok(f".env created at {ENV_FILE}")
-    warn("Review .env before going to production (set DEBUG=false, restrict CORS_ORIGINS).")
+    ok(".env generated with secure random secrets")
 
 # ── Step 3 — Python venv + dependencies ──────────────────────────────────────
 
 def ensure_venv() -> None:
     if not VENV.exists():
-        log("Creating Python virtual environment (.venv)…")
+        log("Creating Python virtual environment…")
         run([sys.executable, "-m", "venv", str(VENV)])
-        ok("Virtual environment created")
 
     log("Installing Python dependencies…")
     run([pip_in_venv(), "install", "--quiet", "--upgrade", "pip"])
     run([pip_in_venv(), "install", "--quiet", "-r", "requirements.txt"])
-    ok("Python dependencies installed")
+    ok("Python dependencies ready")
 
 # ── Step 4 — PostgreSQL DB + user ────────────────────────────────────────────
 
@@ -187,7 +181,7 @@ def ensure_postgres() -> None:
     if pg_isready:
         r = subprocess.run([pg_isready, "-q"], capture_output=True)
         if r.returncode != 0:
-            warn("PostgreSQL not responding — trying to start it…")
+            log("PostgreSQL not responding — attempting to start…")
             for cmd in (
                 ["service", "postgresql", "start"],
                 ["pg_ctlcluster", "16", "main", "start"],
@@ -201,18 +195,15 @@ def ensure_postgres() -> None:
 
             r = subprocess.run([pg_isready, "-q"], capture_output=True)
             if r.returncode != 0:
-                die("PostgreSQL is not running. Start it with: service postgresql start")
+                die("PostgreSQL is not running — start it with: service postgresql start")
 
-    ok("PostgreSQL is running")
-
-    # Create role + DB if missing (no-op if they already exist)
-    _psql_exec("CREATE USER basivo WITH PASSWORD 'basivo';",  ignore_errors=True)
-    _psql_exec("CREATE DATABASE basivo OWNER basivo;",        ignore_errors=True)
+    ok("PostgreSQL running")
+    _psql_exec("CREATE USER basivo WITH PASSWORD 'basivo';", ignore_errors=True)
+    _psql_exec("CREATE DATABASE basivo OWNER basivo;",       ignore_errors=True)
     ok("Database 'basivo' ready")
 
 
 def _psql_exec(sql: str, ignore_errors: bool = False) -> None:
-    """Run a SQL statement as the postgres superuser."""
     for psql_cmd in (
         ["sudo", "-u", "postgres", "psql", "-c", sql],
         ["psql", "-U", "postgres",          "-c", sql],
@@ -222,9 +213,9 @@ def _psql_exec(sql: str, ignore_errors: bool = False) -> None:
             if r.returncode == 0 or ignore_errors:
                 return
     if not ignore_errors:
-        warn("Could not run psql — make sure PostgreSQL is accessible.")
+        warn("psql unavailable — make sure PostgreSQL is accessible")
 
-# ── Step 5 — Alembic migrations ───────────────────────────────────────────────
+# ── Step 5 — Alembic migrations ──────────────────────────────────────────────
 
 def run_migrations() -> None:
     log("Running database migrations…")
@@ -234,7 +225,7 @@ def run_migrations() -> None:
     )
     ok("Migrations applied")
 
-# ── Step 6 — Frontend ─────────────────────────────────────────────────────────
+# ── Step 6 — Frontend ────────────────────────────────────────────────────────
 
 def ensure_frontend(dev_mode: bool) -> None:
     log("Setting up frontend…")
@@ -242,25 +233,25 @@ def ensure_frontend(dev_mode: bool) -> None:
     if not (FRONTEND / "node_modules").exists():
         log("Installing npm dependencies (first run may take a minute)…")
         run(["npm", "install", "--prefer-offline"], cwd=FRONTEND)
-        ok("npm dependencies installed")
 
     if not dev_mode:
-        log("Building React frontend for production…")
+        log("Building React frontend…")
         run(["npm", "run", "build"], cwd=FRONTEND)
-        ok(f"Frontend built → {DIST}")
+        ok("Frontend built")
 
 # ── Step 7 — Start servers ────────────────────────────────────────────────────
 
-def start_production(host: str, port: int) -> None:
+def start_production(host: str, port: int, domain: str | None) -> None:
     if not DIST.exists():
-        die(f"{DIST} not found. Run without --dev to build the frontend first.")
+        die(f"{DIST} not found — frontend build failed")
 
     PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
 
+    display = f"https://{domain}" if domain else f"http://{host}:{port}"
     print(f"\n{BOLD}{GREEN}  ✓ Basivo is running{RESET}")
-    print(f"  App:    {CYAN}http://{host}:{port}{RESET}")
-    print(f"  API:    {CYAN}http://{host}:{port}/api/docs{RESET}")
-    print(f"  Health: {CYAN}http://{host}:{port}/health{RESET}")
+    print(f"  URL:    {CYAN}{display}{RESET}")
+    print(f"  API:    {CYAN}{display}/api/docs{RESET}")
+    print(f"  Health: {CYAN}{display}/health{RESET}")
     print(f"\n  Press Ctrl+C to stop\n")
 
     os.execv(uvicorn_in_venv(), [
@@ -277,8 +268,8 @@ def start_dev(host: str, port: int) -> None:
     PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
 
     print(f"\n{BOLD}{GREEN}  ✓ Basivo — dev mode{RESET}")
-    print(f"  Backend: {CYAN}http://{host}:{port}/api/docs{RESET}")
-    print(f"  Frontend:{CYAN}http://localhost:5173{RESET}")
+    print(f"  Backend:  {CYAN}http://{host}:{port}/api/docs{RESET}")
+    print(f"  Frontend: {CYAN}http://localhost:5173{RESET}")
     print(f"\n  Press Ctrl+C to stop\n")
 
     backend = subprocess.Popen([
@@ -301,20 +292,25 @@ def start_dev(host: str, port: int) -> None:
     backend.wait()
     vite.wait()
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Basivo launcher")
-    parser.add_argument("--dev",  action="store_true", help="Run in development mode (hot-reload)")
-    parser.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1 — expose via nginx)")
-    parser.add_argument("--port", type=int, default=8000, help="Bind port (default: 8000)")
+    parser = argparse.ArgumentParser(description="Basivo launcher — no config needed")
+    parser.add_argument("--dev",    action="store_true",
+                        help="Development mode (hot-reload + vite dev server)")
+    parser.add_argument("--domain", default=None,
+                        help="Your domain, e.g. example.com — sets CORS and display URL")
+    parser.add_argument("--host",   default="127.0.0.1",
+                        help="Bind host (default: 127.0.0.1, exposed via nginx)")
+    parser.add_argument("--port",   type=int, default=8000,
+                        help="Bind port (default: 8000)")
     args = parser.parse_args()
 
     print(f"\n{BOLD}  Basivo — AI Coding Platform{RESET}")
     print(f"  {'development' if args.dev else 'production'} mode\n")
 
     check_prerequisites()
-    ensure_env()
+    ensure_env(args.domain)
     ensure_venv()
     ensure_postgres()
     run_migrations()
@@ -323,7 +319,7 @@ def main() -> None:
     if args.dev:
         start_dev(args.host, args.port)
     else:
-        start_production(args.host, args.port)
+        start_production(args.host, args.port, args.domain)
 
 
 if __name__ == "__main__":
