@@ -1,0 +1,29 @@
+# ── Web framework ─────────────────────────────────────────────────────────────
+fastapi==0.115.6
+uvicorn[standard]==0.34.0     # includes websockets, httptools, uvloop
+
+# ── Database ──────────────────────────────────────────────────────────────────
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0               # async PostgreSQL driver
+alembic==1.14.0
+
+# ── Validation / settings ─────────────────────────────────────────────────────
+pydantic[email]==2.10.4       # includes email-validator for EmailStr
+pydantic-settings==2.7.0
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+python-jose[cryptography]==3.3.0   # JWT
+passlib[bcrypt]==1.7.4             # password hashing
+bcrypt==4.0.1                      # passlib 1.7.4 is incompatible with bcrypt>=4.1 (detect_wrap_bug)
+
+# ── Encryption ────────────────────────────────────────────────────────────────
+cryptography==44.0.0               # Fernet for API key encryption at rest
+
+# ── HTTP client (for testing / future integrations) ───────────────────────────
+httpx==0.28.1
+
+# ── Dev / test ────────────────────────────────────────────────────────────────
+pytest==8.3.4
+pytest-asyncio==0.25.2
+pytest-cov==6.0.0
+aiosqlite==0.20.0              # async SQLite driver for in-memory tests (no Postgres needed)

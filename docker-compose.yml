@@ -1,0 +1,85 @@
+# docker-compose.yml
+# Full local development stack: FastAPI backend + PostgreSQL
+#
+# Usage:
+#   docker compose up --build          # start everything
+#   docker compose exec backend bash   # shell into the backend
+#   docker compose down -v             # stop and remove volumes
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+version: "3.9"
+
+services:
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: basivo
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── FastAPI Backend ────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Override DATABASE_URL to use the Docker service name
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/basivo
+      PROJECTS_ROOT: /app/projects
+    ports:
+      - "8000:8000"
+    volumes:
+      # ── CRITICAL DOCKER MOUNT POINT ─────────────────────────────────────────
+      # Bind-mount the host projects directory into the container so that:
+      #   1. OpenCode subprocesses can read/write user project files.
+      #   2. Files persist even when the container is rebuilt/replaced.
+      #   3. A future "OpenCode container" can mount the same volume.
+      #
+      # Production: use a named volume or NFS mount instead of a bind mount.
+      - projects_data:/app/projects
+      # ── Hot-reload in development ──────────────────────────────────────────
+      # Uncomment the line below to mount source code for live reloading
+      # (also change the CMD to add --reload):
+      # - ./app:/app/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1"
+
+  # ── OpenCode Runner (future) ───────────────────────────────────────────────
+  # Uncomment this service once you containerise the OpenCode CLI.
+  # The backend will call `docker run` (or a sidecar API) instead of spawning
+  # a subprocess directly.
+  #
+  # opencode-runner:
+  #   image: opencode:latest
+  #   volumes:
+  #     - projects_data:/app/projects   # shared volume with backend
+  #   environment:
+  #     OPENAI_API_KEY: ""  # injected per-request by the backend
+  #     OPENAI_BASE_URL: "" # injected per-request by the backend
+
+
+volumes:
+  postgres_data:
+  projects_data:
+    # PRODUCTION: replace with an NFS or cloud-provider managed volume
+    # for shared access across multiple backend replicas.
