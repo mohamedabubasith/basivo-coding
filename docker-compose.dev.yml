@@ -1,0 +1,27 @@
+###############################################################################
+#  Basivo — Development overrides
+#  Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+###############################################################################
+
+services:
+  db:
+    ports:
+      - "5432:5432"    # expose DB for local tools (DBeaver, psql, etc.)
+
+  app:
+    build:
+      target: backend          # skip frontend build stage — use vite dev server
+    ports:
+      - "8000:8000"
+    environment:
+      DEBUG: "true"
+      CORS_ORIGINS: '["http://localhost:5173","http://localhost:3000","http://localhost:8000"]'
+      # Use weak secrets in dev — override before deploying
+      JWT_SECRET_KEY: dev_jwt_secret_not_for_production
+      ENCRYPTION_KEY: dev_fernet_key_CHANGE_ME_32bytes==
+    volumes:
+      - ./app:/app/app          # live-reload: mount source code
+      - ./alembic:/app/alembic
+    command: >
+      sh -c "PYTHONPATH=/app alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --log-level debug"

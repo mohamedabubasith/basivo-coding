@@ -35,6 +35,19 @@ class ProjectCreateRequest(BaseModel):
         description="Model identifier, e.g. 'gpt-4o'. Optional — OpenCode may auto-detect.",
     )
 
+    # GitHub integration (optional — can be set later via PATCH)
+    github_repo_url: str | None = Field(default=None, max_length=2048)
+    github_token: str | None = Field(
+        default=None,
+        description="GitHub Personal Access Token — stored encrypted, never returned.",
+    )
+
+
+class GitHubSettingsRequest(BaseModel):
+    """PATCH payload to update/clear GitHub integration on an existing project."""
+    github_repo_url: str | None = Field(default=None, max_length=2048)
+    github_token: str | None = Field(default=None)
+
 
 # ── Response ──────────────────────────────────────────────────────────────────
 
@@ -50,7 +63,9 @@ class ProjectResponse(BaseModel):
     description: str | None
     llm_base_url: str
     llm_model: str | None
-    api_key_set: bool = True   # always True if a project row exists
+    api_key_set: bool = True
+    github_repo_url: str | None = None
+    github_token_set: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -69,6 +84,8 @@ class ProjectResponse(BaseModel):
             llm_base_url=str(project.llm_base_url),
             llm_model=project.llm_model,
             api_key_set=bool(project.llm_api_key_encrypted),
+            github_repo_url=project.github_repo_url,
+            github_token_set=bool(project.github_token_encrypted),
             created_at=project.created_at,
             updated_at=project.updated_at,
         )
